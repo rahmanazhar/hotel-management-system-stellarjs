@@ -1,0 +1,26 @@
+{
+  "name": "hotel-management-system-stellarjs",
+  "version": "1.0.0",
+  "description": "Hotel Management System built with StellarJS framework",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node ../StellarJS/node_modules/typescript/bin/tsc",
+    "dev": "node ../StellarJS/node_modules/ts-node-dev/bin/ts-node-dev --respawn --transpile-only src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@rahmanazhar/stellar-js": "file:../StellarJS",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.3.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.2",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.2",
+    "@types/mongoose": "^5.11.97",
+    "@types/node": "^20.3.2",
+    "typescript": "^5.1.5"
+  }
+}
