@@ -12,9 +12,12 @@ module.exports = (env, argv) => ({
   resolve: {
     extensions: ['.tsx', '.ts', '.js'],
     alias: {
-      // Ensure a single React instance
+      // Force all packages to use the same single instances so React context
+      // (Router, etc.) is never split across two copies of the same library.
       react: path.resolve('./node_modules/react'),
       'react-dom': path.resolve('./node_modules/react-dom'),
+      'react-router': path.resolve('./node_modules/react-router'),
+      'react-router-dom': path.resolve('./node_modules/react-router-dom'),
     },
   },
   module: {
