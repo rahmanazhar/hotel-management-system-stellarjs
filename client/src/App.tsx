@@ -5,6 +5,7 @@ import { StellarApp } from '@rahmanazhar/stellar-js/dist/core/StellarApp';
 import { useLocalStorage } from '@rahmanazhar/stellar-js/dist/hooks';
 
 import { authService, roomService, customerService, bookingService } from './api/services';
+import { ToastProvider } from './context/ToastContext';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
@@ -32,31 +33,25 @@ interface AuthState {
 export default function App() {
   const [auth, setAuth, clearAuth] = useLocalStorage<AuthState | null>('hotel_auth', null);
 
-  function handleLogin(result: AuthState) {
-    setAuth(result);
-  }
-
-  function handleLogout() {
-    clearAuth();
-  }
-
   return (
     <StellarApp config={stellarConfig}>
-      {!auth ? (
-        <LoginPage onLogin={handleLogin} />
-      ) : (
-        <Layout user={auth.user} onLogout={handleLogout}>
-          <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/rooms" element={<RoomsPage userRole={auth.user.role} />} />
-            <Route path="/bookings" element={<BookingsPage userRole={auth.user.role} userId={auth.user.id} />} />
-            {(auth.user.role === 'admin' || auth.user.role === 'receptionist') && (
-              <Route path="/customers" element={<CustomersPage userRole={auth.user.role} />} />
-            )}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Layout>
-      )}
+      <ToastProvider>
+        {!auth ? (
+          <LoginPage onLogin={result => setAuth(result)} />
+        ) : (
+          <Layout user={auth.user} onLogout={clearAuth}>
+            <Routes>
+              <Route path="/"         element={<DashboardPage />} />
+              <Route path="/rooms"    element={<RoomsPage userRole={auth.user.role} />} />
+              <Route path="/bookings" element={<BookingsPage userRole={auth.user.role} userId={auth.user.id} />} />
+              {(auth.user.role === 'admin' || auth.user.role === 'receptionist') && (
+                <Route path="/customers" element={<CustomersPage userRole={auth.user.role} />} />
+              )}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Layout>
+        )}
+      </ToastProvider>
     </StellarApp>
   );
 }

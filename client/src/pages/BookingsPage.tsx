@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAsync, useToggle } from '@rahmanazhar/stellar-js/dist/hooks';
 import { bookingService, roomService } from '../api/services';
+import { useToast } from '../context/ToastContext';
+import { Plus, CalendarDays, Trash2, Search, AlertCircle, X, ChevronDown } from 'lucide-react';
 
 interface Booking {
   _id: string;
@@ -17,44 +19,75 @@ interface Booking {
 }
 
 const STATUS_TRANSITIONS: Record<string, string[]> = {
-  pending: ['confirmed', 'cancelled'],
-  confirmed: ['checked_in', 'cancelled'],
-  checked_in: ['checked_out'],
+  pending:     ['confirmed', 'cancelled'],
+  confirmed:   ['checked_in', 'cancelled'],
+  checked_in:  ['checked_out'],
   checked_out: [],
-  cancelled: [],
+  cancelled:   [],
 };
 
+const ALL_STATUSES = ['pending', 'confirmed', 'checked_in', 'checked_out', 'cancelled'];
+
+function fmt(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function nights(ci: string, co: string) {
+  return Math.ceil((new Date(co).getTime() - new Date(ci).getTime()) / 86400000);
+}
+
 export default function BookingsPage({ userRole, userId }: { userRole: string; userId: string }) {
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [filterStatus, setFilterStatus] = useState('');
-  const [showCreate, , setShowCreate] = useToggle(false);
-  const [rooms, setRooms] = useState<any[]>([]);
+  const toast = useToast();
+
+  const [allBookings, setAllBookings] = useState<Booking[]>([]);
+  const [activeTab,   setActiveTab]   = useState('');
+  const [showCreate,, setShowCreate]  = useToggle(false);
+  const [availRooms,  setAvailRooms]  = useState<any[]>([]);
   const [form, setForm] = useState({ roomId: '', checkIn: '', checkOut: '', numberOfGuests: '1', notes: '' });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [formErr, setFormErr] = useState('');
 
   const isAdmin = userRole === 'admin';
-  const isStaff = userRole === 'admin' || userRole === 'receptionist';
 
-  const listAsync = useAsync(() => bookingService.getAll({ status: filterStatus || undefined }));
-  const createAsync = useAsync((data: any) => bookingService.create(data));
+  const listAsync      = useAsync(() => bookingService.getAll({}));
+  const createAsync    = useAsync((data: any) => bookingService.create(data));
   const availRoomsAsync = useAsync((ci: string, co: string) => roomService.getAvailability(ci, co));
 
   function load() {
-    listAsync.execute().then(res => setBookings(res.data || [])).catch(() => {});
+    listAsync.execute().then(res => setAllBookings(res.data || [])).catch(() => {});
   }
 
-  useEffect(() => { load(); }, [filterStatus]);
+  useEffect(() => { load(); }, []);
+
+  // Counts per status
+  const counts = useMemo(() => {
+    const map: Record<string, number> = {};
+    allBookings.forEach(b => { map[b.status] = (map[b.status] ?? 0) + 1; });
+    return map;
+  }, [allBookings]);
+
+  // Filtered list based on active tab
+  const bookings = useMemo(() =>
+    activeTab ? allBookings.filter(b => b.status === activeTab) : allBookings,
+    [allBookings, activeTab]
+  );
 
   async function handleStatusChange(id: string, status: string) {
-    const reason = status === 'cancelled' ? prompt('Cancellation reason (optional):') || undefined : undefined;
     try {
-      await bookingService.updateStatus(id, status, reason);
-      setSuccess(`Booking updated to "${status}"`);
+      await bookingService.updateStatus(id, status);
+      toast.success(`Booking updated to "${status.replace('_', ' ')}"`);
       load();
-      setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
-      alert(err?.response?.data?.error || 'Update failed');
+      toast.error(err?.response?.data?.error || 'Update failed');
+    }
+  }
+
+  async function handleDelete(id: string, ref: string) {
+    if (!confirm(`Delete booking ${ref}? This cannot be undone.`)) return;
+    try {
+      await bookingService.delete(id);
+      toast.success('Booking deleted');
+      load();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Delete failed');
     }
   }
 
@@ -62,15 +95,15 @@ export default function BookingsPage({ userRole, userId }: { userRole: string; u
     if (!form.checkIn || !form.checkOut) return;
     try {
       const res = await availRoomsAsync.execute(form.checkIn, form.checkOut);
-      setRooms(res.data || []);
+      setAvailRooms(res.data || []);
     } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not check availability');
+      toast.error(err?.response?.data?.error || 'Could not check availability');
     }
   }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
+    setFormErr('');
     try {
       await createAsync.execute({
         roomId: form.roomId,
@@ -79,49 +112,80 @@ export default function BookingsPage({ userRole, userId }: { userRole: string; u
         numberOfGuests: Number(form.numberOfGuests),
         notes: form.notes,
       });
-      setSuccess('Booking created!');
+      toast.success('Booking created successfully');
       setShowCreate(false);
       setForm({ roomId: '', checkIn: '', checkOut: '', numberOfGuests: '1', notes: '' });
-      setRooms([]);
+      setAvailRooms([]);
       load();
-      setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
-      setError(err?.response?.data?.error || err.message);
+      setFormErr(err?.response?.data?.error || err.message);
     }
   }
 
-  function nights(checkIn: string, checkOut: string): number {
-    return Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000);
-  }
+  // Preview price in the form
+  const selectedRoom = availRooms.find(r => r._id === form.roomId);
+  const nightCount = form.checkIn && form.checkOut
+    ? Math.ceil((new Date(form.checkOut).getTime() - new Date(form.checkIn).getTime()) / 86400000)
+    : 0;
 
   return (
     <div>
+      {/* ── Header ──────────────────────────────────────── */}
       <div className="page-header">
         <div>
           <h1>Bookings</h1>
-          <p>{bookings.length} booking{bookings.length !== 1 ? 's' : ''}</p>
+          <p>{allBookings.length} booking{allBookings.length !== 1 ? 's' : ''} total</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Booking</button>
+        <button className="btn btn-primary" onClick={() => { setShowCreate(true); setFormErr(''); }}>
+          <Plus size={16} /> New Booking
+        </button>
       </div>
 
-      {success && <div className="alert alert-success">{success}</div>}
-
-      <div className="filters">
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
-          <option value="">All Statuses</option>
-          {['pending', 'confirmed', 'checked_in', 'checked_out', 'cancelled'].map(s =>
-            <option key={s} value={s}>{s.replace('_', ' ')}</option>
-          )}
-        </select>
+      {/* ── Status tabs ──────────────────────────────────── */}
+      <div className="status-tabs">
+        <button
+          className={`status-tab${activeTab === '' ? ' active' : ''}`}
+          onClick={() => setActiveTab('')}
+        >
+          All
+          <span className="status-tab-count">{allBookings.length}</span>
+        </button>
+        {ALL_STATUSES.map(s => (
+          <button
+            key={s}
+            className={`status-tab${activeTab === s ? ' active' : ''}`}
+            onClick={() => setActiveTab(s)}
+          >
+            {s.replace('_', ' ')}
+            {counts[s] ? <span className="status-tab-count">{counts[s]}</span> : null}
+          </button>
+        ))}
       </div>
 
-      {listAsync.isPending && <div className="loading">Loading bookings…</div>}
-
-      {!listAsync.isPending && bookings.length === 0 && (
-        <div className="empty"><div className="empty-icon">📋</div><p>No bookings found</p></div>
+      {/* ── Loading ─────────────────────────────────────── */}
+      {listAsync.isPending && (
+        <div className="loading-wrap">
+          <div className="spinner" />
+          <span>Loading bookings…</span>
+        </div>
       )}
 
-      {bookings.length > 0 && (
+      {/* ── Empty ───────────────────────────────────────── */}
+      {!listAsync.isPending && bookings.length === 0 && (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon"><CalendarDays size={28} /></div>
+            <h3>No bookings found</h3>
+            <p>{activeTab ? `No ${activeTab.replace('_', ' ')} bookings.` : 'Create the first booking to get started.'}</p>
+            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => setShowCreate(true)}>
+              <Plus size={16} /> New Booking
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Table ───────────────────────────────────────── */}
+      {!listAsync.isPending && bookings.length > 0 && (
         <div className="card">
           <div className="table-wrap">
             <table>
@@ -132,7 +196,7 @@ export default function BookingsPage({ userRole, userId }: { userRole: string; u
                   <th>Guest</th>
                   <th>Check In</th>
                   <th>Check Out</th>
-                  <th>Nights</th>
+                  <th style={{ textAlign: 'center' }}>Nights</th>
                   <th>Total</th>
                   <th>Status</th>
                   <th>Actions</th>
@@ -140,41 +204,74 @@ export default function BookingsPage({ userRole, userId }: { userRole: string; u
               </thead>
               <tbody>
                 {bookings.map(b => {
-                  const transitions = STATUS_TRANSITIONS[b.status] || [];
+                  const transitions = STATUS_TRANSITIONS[b.status] ?? [];
                   return (
                     <tr key={b._id}>
-                      <td><strong style={{ fontFamily: 'monospace', fontSize: 12 }}>{b.bookingReference}</strong></td>
-                      <td>{b.roomId?.number ? `Room ${b.roomId.number}` : '-'}<br />
-                        <span style={{ fontSize: 11, color: '#888' }}>{b.roomId?.type}</span>
+                      <td>
+                        <span className="text-mono" style={{ fontSize: 12, fontWeight: 600 }}>
+                          {b.bookingReference}
+                        </span>
                       </td>
                       <td>
-                        {b.customerId?.firstName} {b.customerId?.lastName}<br />
-                        <span style={{ fontSize: 11, color: '#888' }}>{b.customerId?.userId?.email}</span>
+                        <div style={{ fontWeight: 600 }}>
+                          {b.roomId?.number ? `Room ${b.roomId.number}` : '—'}
+                        </div>
+                        {b.roomId?.type && (
+                          <div style={{ fontSize: 11, color: 'var(--color-text-3)', textTransform: 'capitalize' }}>
+                            {b.roomId.type}
+                          </div>
+                        )}
                       </td>
-                      <td>{new Date(b.checkIn).toLocaleDateString()}</td>
-                      <td>{new Date(b.checkOut).toLocaleDateString()}</td>
-                      <td style={{ textAlign: 'center' }}>{nights(b.checkIn, b.checkOut)}</td>
-                      <td><strong>${b.totalPrice.toLocaleString()}</strong></td>
-                      <td><span className={`badge badge-${b.status}`}>{b.status.replace('_', ' ')}</span></td>
                       <td>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                        <div style={{ fontWeight: 500 }}>
+                          {b.customerId?.firstName} {b.customerId?.lastName}
+                        </div>
+                        {b.customerId?.userId?.email && (
+                          <div style={{ fontSize: 11, color: 'var(--color-text-3)' }}>
+                            {b.customerId.userId.email}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{fmt(b.checkIn)}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{fmt(b.checkOut)}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 600 }}>
+                        {nights(b.checkIn, b.checkOut)}
+                      </td>
+                      <td>
+                        <span style={{ fontWeight: 700 }}>${b.totalPrice.toLocaleString()}</span>
+                      </td>
+                      <td>
+                        <span className={`badge badge-${b.status}`}>
+                          {b.status.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                           {transitions.length > 0 && (
                             <select
+                              className="status-select"
+                              style={{ minWidth: 110 }}
                               defaultValue=""
-                              onChange={e => { if (e.target.value) handleStatusChange(b._id, e.target.value); e.target.value = ''; }}
-                              style={{ padding: '4px 8px', border: '1.5px solid #e0e3e8', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' }}
+                              onChange={e => {
+                                if (e.target.value) handleStatusChange(b._id, e.target.value);
+                                e.target.value = '';
+                              }}
                             >
-                              <option value="">Change…</option>
-                              {transitions.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                              <option value="">Move to…</option>
+                              {transitions.map(t => (
+                                <option key={t} value={t}>{t.replace('_', ' ')}</option>
+                              ))}
                             </select>
                           )}
                           {isAdmin && ['pending', 'cancelled', 'checked_out'].includes(b.status) && (
-                            <button className="btn btn-danger btn-sm"
-                              onClick={async () => {
-                                if (!confirm('Delete this booking?')) return;
-                                await bookingService.delete(b._id);
-                                load();
-                              }}>Del</button>
+                            <button
+                              className="btn btn-icon"
+                              style={{ color: 'var(--clr-error)' }}
+                              title="Delete booking"
+                              onClick={() => handleDelete(b._id, b.bookingReference)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -187,75 +284,128 @@ export default function BookingsPage({ userRole, userId }: { userRole: string; u
         </div>
       )}
 
+      {/* ── New booking modal ────────────────────────────── */}
       {showCreate && (
         <div className="modal-overlay" onClick={() => setShowCreate(false)}>
           <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
-            <h2>New Booking</h2>
-            {error && <div className="alert alert-error">{error}</div>}
-            <form onSubmit={handleCreate}>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Check-In Date *</label>
-                  <input type="date" value={form.checkIn} onChange={e => setForm(p => ({ ...p, checkIn: e.target.value }))} required />
-                </div>
-                <div className="form-group">
-                  <label>Check-Out Date *</label>
-                  <input type="date" value={form.checkOut} onChange={e => setForm(p => ({ ...p, checkOut: e.target.value }))} required />
-                </div>
+            <div className="modal-header">
+              <div className="modal-header-text">
+                <h2>New Booking</h2>
+                <p>Select dates, check availability and confirm</p>
               </div>
-              <button type="button" className="btn btn-secondary" style={{ marginBottom: 16 }}
-                onClick={handleCheckAvailability} disabled={!form.checkIn || !form.checkOut || availRoomsAsync.isPending}>
-                {availRoomsAsync.isPending ? 'Checking…' : '🔍 Check Availability'}
+              <button className="modal-close" onClick={() => setShowCreate(false)}>
+                <X size={20} />
               </button>
+            </div>
 
-              {rooms.length > 0 && (
-                <div className="form-group">
-                  <label>Select Room * ({rooms.length} available)</label>
-                  <select value={form.roomId} onChange={e => setForm(p => ({ ...p, roomId: e.target.value }))} required>
-                    <option value="">Choose a room…</option>
-                    {rooms.map((r: any) => (
-                      <option key={r._id} value={r._id}>
-                        Room {r.number} — {r.type}, Floor {r.floor}, ${r.pricePerNight}/night
-                      </option>
-                    ))}
-                  </select>
+            <div className="modal-body">
+              {formErr && (
+                <div className="alert alert-error">
+                  <span className="alert-icon"><AlertCircle size={16} /></span>
+                  {formErr}
                 </div>
               )}
 
-              {rooms.length === 0 && form.checkIn && form.checkOut && !availRoomsAsync.isPending && (
-                <div className="alert alert-error" style={{ marginBottom: 12 }}>No rooms available for selected dates</div>
-              )}
-
-              <div className="form-group">
-                <label>Number of Guests *</label>
-                <input type="number" min="1" value={form.numberOfGuests} onChange={e => setForm(p => ({ ...p, numberOfGuests: e.target.value }))} required />
-              </div>
-              <div className="form-group">
-                <label>Notes</label>
-                <textarea rows={2} value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} placeholder="Special requests…" />
-              </div>
-
-              {form.roomId && form.checkIn && form.checkOut && (
-                <div style={{ background: '#f9fafb', borderRadius: 8, padding: '12px 16px', marginBottom: 12, fontSize: 13 }}>
-                  {(() => {
-                    const room = rooms.find(r => r._id === form.roomId);
-                    const n = room && form.checkIn && form.checkOut
-                      ? Math.ceil((new Date(form.checkOut).getTime() - new Date(form.checkIn).getTime()) / 86400000)
-                      : 0;
-                    return room ? (
-                      <strong>Total: {n} night{n !== 1 ? 's' : ''} × ${room.pricePerNight} = ${n * room.pricePerNight}</strong>
-                    ) : null;
-                  })()}
+              <form onSubmit={handleCreate} id="booking-form">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">
+                      Check-In <span className="form-label-required">*</span>
+                    </label>
+                    <input className="form-input" type="date"
+                      value={form.checkIn}
+                      onChange={e => { setForm(p => ({ ...p, checkIn: e.target.value })); setAvailRooms([]); }}
+                      required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">
+                      Check-Out <span className="form-label-required">*</span>
+                    </label>
+                    <input className="form-input" type="date"
+                      value={form.checkOut}
+                      onChange={e => { setForm(p => ({ ...p, checkOut: e.target.value })); setAvailRooms([]); }}
+                      required />
+                  </div>
                 </div>
-              )}
 
-              <div className="modal-actions">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={createAsync.isPending || !form.roomId}>
-                  {createAsync.isPending ? 'Creating…' : 'Create Booking'}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ marginTop: 4 }}
+                  onClick={handleCheckAvailability}
+                  disabled={!form.checkIn || !form.checkOut || availRoomsAsync.isPending}
+                >
+                  <Search size={14} />
+                  {availRoomsAsync.isPending ? 'Checking…' : 'Check Availability'}
                 </button>
-              </div>
-            </form>
+
+                {availRooms.length > 0 && (
+                  <div className="form-group">
+                    <label className="form-label">
+                      Select Room <span className="form-label-required">*</span>
+                      <span style={{ fontWeight: 400, color: 'var(--color-text-3)' }}>
+                        &nbsp;— {availRooms.length} available
+                      </span>
+                    </label>
+                    <select className="form-select" value={form.roomId}
+                      onChange={e => setForm(p => ({ ...p, roomId: e.target.value }))} required>
+                      <option value="">Choose a room…</option>
+                      {availRooms.map((r: any) => (
+                        <option key={r._id} value={r._id}>
+                          Room {r.number} — {r.type}, Floor {r.floor} — ${r.pricePerNight}/night
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {availRooms.length === 0 && form.checkIn && form.checkOut && !availRoomsAsync.isPending && (
+                  <div className="alert alert-warning" style={{ marginTop: 12 }}>
+                    <span className="alert-icon"><AlertCircle size={16} /></span>
+                    No available rooms for the selected dates.
+                  </div>
+                )}
+
+                {selectedRoom && nightCount > 0 && (
+                  <div className="price-summary">
+                    <span style={{ color: 'var(--color-text-2)' }}>
+                      {nightCount} night{nightCount !== 1 ? 's' : ''} × ${selectedRoom.pricePerNight}
+                    </span>
+                    {' = '}
+                    <strong>${(nightCount * selectedRoom.pricePerNight).toLocaleString()}</strong>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label">
+                    Number of Guests <span className="form-label-required">*</span>
+                  </label>
+                  <input className="form-input" type="number" min="1"
+                    value={form.numberOfGuests}
+                    onChange={e => setForm(p => ({ ...p, numberOfGuests: e.target.value }))} required />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Notes</label>
+                  <textarea className="form-textarea" rows={2}
+                    value={form.notes}
+                    onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
+                    placeholder="Special requests, preferences…" />
+                </div>
+              </form>
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
+              <button
+                form="booking-form"
+                type="submit"
+                className="btn btn-primary"
+                disabled={createAsync.isPending || !form.roomId}
+              >
+                {createAsync.isPending ? 'Creating…' : 'Create Booking'}
+              </button>
+            </div>
           </div>
         </div>
       )}
